@@ -1,0 +1,20 @@
+# Deployment to Synology DS923+:
+#   1. rsync -av --exclude node_modules --exclude .git ~/Code/chart-show/ nas:/volume1/docker/chart-show/
+#   2. scp .env nas:/volume1/docker/chart-show/.env
+#   3. SSH into NAS:
+#        cd /volume1/docker/chart-show
+#        docker compose build
+#        docker compose up -d
+#   4. Verify:
+#        docker compose logs -f
+#        docker compose exec chart-show node src/index.js   # manual test run
+
+services:
+  chart-show:
+    build: .
+    container_name: chart-show
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - ./.env:/app/.env

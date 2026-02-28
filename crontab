@@ -1,0 +1,2 @@
+# Every Friday at 2pm Central (TZ=America/Chicago set in docker-compose.yml)
+0 14 * * 5 /bin/sh -c "cd /app && node src/index.js" 2>&1

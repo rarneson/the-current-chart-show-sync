@@ -1,0 +1,21 @@
+{
+  "name": "chart-show",
+  "version": "1.0.0",
+  "description": "Scrapes The Current's Chart Show top 20 and syncs to a Spotify playlist",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "authorize": "node scripts/authorize.js"
+  },
+  "keywords": [],
+  "author": "Ryan Arneson",
+  "license": "ISC",
+  "claude": "Built with Claude Code (claude.ai/claude-code)",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "puppeteer": "^24.37.5",
+    "spotify-web-api-node": "^5.0.2"
+  }
+}
