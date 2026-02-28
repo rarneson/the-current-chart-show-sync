@@ -56,6 +56,35 @@ docker compose logs -f
 docker compose exec chart-show node src/index.js
 ```
 
+## Deployment (Synology NAS)
+
+A GitHub Actions workflow builds and pushes the image to GHCR on every push to `main`. The NAS just pulls the prebuilt `linux/amd64` image — no source code or build tools needed.
+
+### Initial setup
+
+```bash
+# On the NAS
+mkdir -p /volume1/docker/chart-show && cd /volume1/docker/chart-show
+
+# Get the prod compose file
+curl -fsSLO https://raw.githubusercontent.com/rarneson/the-current-chart-show-sync/main/docker-compose.prod.yml
+
+# Add your .env (with Spotify credentials + tokens)
+nano .env
+
+# Pull and start
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Updating
+
+```bash
+cd /volume1/docker/chart-show
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ## How It Works
 
 1. Uses Puppeteer (headless Chrome) to scrape the chart — the site returns 403 to plain HTTP requests

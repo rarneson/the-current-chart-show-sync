@@ -1,8 +1,6 @@
-# Local dev — builds from source. For production deployment, use docker-compose.prod.yml.
-
 services:
   chart-show:
-    build: .
+    image: ghcr.io/rarneson/the-current-chart-show-sync:latest
     container_name: chart-show
     restart: unless-stopped
     environment:
