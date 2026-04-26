@@ -1,4 +1,8 @@
 const puppeteer = require('puppeteer');
+const tesseract = require('node-tesseract-ocr');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const CHART_SHOW_URL = 'https://www.thecurrent.org/programs/chart-show';
 const HOF_URL =
@@ -19,6 +23,103 @@ async function launchBrowser() {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
   return { browser, page };
+}
+
+/**
+ * Parse Tesseract output into [{rank, artist, title}, ...].
+ *
+ * The chart graphic Tesseract is fed has the layout:
+ *   <header lines>
+ *   Artist Name
+ *   "Song Title"
+ *   Artist Name
+ *   "Song Title"
+ *   ...
+ *
+ * Tesseract drops the stylized red rank digits, so rank is derived from order.
+ * Titles are wrapped in smart quotes (U+201C / U+201D), occasionally regular
+ * straight quotes when OCR slips.
+ */
+function parseChartText(text) {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const titleRegex = /^[“”"](.+?)[“”"]$/;
+  const songs = [];
+  let pendingArtist = null;
+  let rank = 0;
+
+  for (const line of lines) {
+    // Drop chart header lines.
+    if (/top\s+\d+\s+voted/i.test(line)) continue;
+    if (/chart\s+show/i.test(line) && !pendingArtist) continue;
+
+    const titleMatch = line.match(titleRegex);
+    if (titleMatch) {
+      if (pendingArtist) {
+        rank += 1;
+        songs.push({ rank, artist: pendingArtist, title: titleMatch[1] });
+        pendingArtist = null;
+      }
+      continue;
+    }
+
+    // Anything else: treat as an artist line. If we already had one pending
+    // (no title arrived between two artist lines), the latest wins — better
+    // to drop a malformed entry than emit a bogus one.
+    pendingArtist = line;
+  }
+
+  return songs;
+}
+
+/**
+ * Validate the parsed chart. Throws on anything suspicious so cron fails loudly
+ * instead of pushing garbage to the Spotify playlist.
+ */
+function validateSongs(songs) {
+  if (songs.length < 5) {
+    throw new Error(`Only ${songs.length} song(s) parsed — chart layout may have changed`);
+  }
+  for (let i = 0; i < songs.length; i++) {
+    const s = songs[i];
+    if (s.rank !== i + 1) {
+      throw new Error(`Non-consecutive rank at index ${i}: expected ${i + 1}, got ${s.rank}`);
+    }
+    if (!s.artist || !s.title) {
+      throw new Error(`Empty artist/title at rank ${s.rank}`);
+    }
+  }
+}
+
+/**
+ * Fetch a chart-graphic URL, OCR it with Tesseract, and return
+ * [{rank, artist, title}, ...] in chart order.
+ *
+ * The Current publishes a CMYK JPEG. Modern Tesseract/leptonica reads CMYK
+ * directly, so we don't pre-convert — every conversion library tested
+ * (sharp/libvips with various ICC profile guesses) made OCR markedly worse.
+ */
+async function extractSongsFromImage(imageUrl) {
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch chart image: ${resp.status} ${resp.statusText}`);
+  }
+  const buffer = Buffer.from(await resp.arrayBuffer());
+
+  const tmpPath = path.join(os.tmpdir(), `chartshow-${process.pid}-${Date.now()}.jpg`);
+  await fs.promises.writeFile(tmpPath, buffer);
+
+  try {
+    const text = await tesseract.recognize(tmpPath, { lang: 'eng' });
+    const songs = parseChartText(text);
+    validateSongs(songs);
+    return songs;
+  } finally {
+    await fs.promises.unlink(tmpPath).catch(() => {});
+  }
 }
 
 /**
@@ -78,40 +179,31 @@ async function scrapeChart(page) {
       console.log(`Chart date: ${chartDate}`);
     }
 
-    // Extract the top 20 from the chart table
-    const songs = await page.evaluate(() => {
-      const table = document.querySelector('table.chartshow');
-      if (!table) return [];
-
-      const rows = Array.from(table.querySelectorAll('tbody tr'));
-      const results = [];
-
-      for (const row of rows) {
-        const cells = Array.from(row.querySelectorAll('td'));
-        if (cells.length < 5) continue;
-
-        const rank = parseInt(cells[0].textContent.trim(), 10);
-        if (isNaN(rank)) continue; // Skip header-like rows
-
-        const artist = cells[3].textContent.trim();
-        const title = cells[4].textContent.trim();
-
-        if (artist && title) {
-          results.push({ rank, artist, title });
-        }
-      }
-
-      return results;
+    // The chart is now published as a JPEG graphic, not an HTML table.
+    // Find the chart image URL on the episode page, then OCR it with Claude vision.
+    const imageUrl = await page.evaluate(() => {
+      const imgs = Array.from(document.querySelectorAll('img'));
+      const match = imgs.find(
+        (img) => /apmcdn\.org/.test(img.src) && /chart-show/i.test(img.src)
+      );
+      return match ? match.src : null;
     });
 
-    if (songs.length === 0) {
-      throw new Error('Could not extract any songs from the chart table');
+    if (!imageUrl) {
+      throw new Error('Could not find a chart image on the episode page');
     }
 
-    // Sort by rank ascending (should already be, but ensure it)
+    console.log(`Chart image: ${imageUrl}`);
+
+    const songs = await extractSongsFromImage(imageUrl);
+
+    if (songs.length === 0) {
+      throw new Error('Vision extraction returned no songs');
+    }
+
     songs.sort((a, b) => a.rank - b.rank);
 
-    console.log(`Scraped ${songs.length} songs from the chart`);
+    console.log(`Extracted ${songs.length} songs from chart image`);
 
     return { songs, chartDate, episodeUrl };
   } finally {
@@ -170,4 +262,10 @@ async function scrapeHallOfFame(page) {
   }
 }
 
-module.exports = { launchBrowser, scrapeChart, scrapeHallOfFame };
+module.exports = {
+  launchBrowser,
+  scrapeChart,
+  scrapeHallOfFame,
+  extractSongsFromImage,
+  parseChartText,
+};
