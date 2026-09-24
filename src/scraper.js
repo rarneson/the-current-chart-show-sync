@@ -9,6 +9,26 @@ const HOF_URL =
   'https://www.thecurrent.org/feature/2013/03/28/chart-show-hall-of-fame';
 
 /**
+ * Navigate with retries. A single flaky connection (common on residential/NAS
+ * links) shouldn't fail an entire weekly run — retry a couple times with
+ * backoff before giving up.
+ */
+async function gotoWithRetry(page, url, options, retries = 2) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await page.goto(url, options);
+    } catch (err) {
+      if (attempt > retries) throw err;
+      const delayMs = attempt * 5000;
+      console.log(
+        `Navigation to ${url} failed (${err.message}) — retrying in ${delayMs}ms (attempt ${attempt}/${retries})...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+/**
  * Launch a headless browser and return { browser, page } with a realistic user agent.
  * Caller is responsible for closing the browser when done.
  */
@@ -136,7 +156,7 @@ async function scrapeChart(page) {
   try {
     // Navigate to the chart show program page
     console.log('Navigating to Chart Show page...');
-    await page.goto(CHART_SHOW_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await gotoWithRetry(page, CHART_SHOW_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
     // Find the first (most recent) episode link from the teaser grid.
     // Exclude the static Hall of Fame page (2013) but keep regular weekly
@@ -161,7 +181,7 @@ async function scrapeChart(page) {
     console.log(`Found latest episode: ${episodeUrl}`);
 
     // Navigate to the episode detail page
-    await page.goto(episodeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await gotoWithRetry(page, episodeUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
     // Extract the chart date from the page
     const chartDate = await page.evaluate(() => {
@@ -224,7 +244,7 @@ async function scrapeHallOfFame(page) {
 
   try {
     console.log('Navigating to Hall of Fame page...');
-    await page.goto(HOF_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await gotoWithRetry(page, HOF_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
     const songs = await page.evaluate(() => {
       const article = document.querySelector('article');
